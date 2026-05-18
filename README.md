@@ -6,6 +6,14 @@
 
 Remote Codex API 是一个轻量桌面托盘工具。它不会注入 Codex UI，也不会修改已安装的 Codex App，只负责管理第三方 Provider 配置、保留 ChatGPT 登录态、快速同步本地历史可见性，并在需要时打开或重启 Codex。
 
+## 交流群
+
+扫码加入交流群，交流第三方 API、Codex Remote、Codex Manager、本地历史同步和跨平台使用问题。
+
+<img src="docs/assets/wechat-group.jpg" alt="Remote Codex API WeChat group" width="360" />
+
+当前二维码有效期至 2026-05-25，过期后会在仓库里更新。
+
 ## 为什么做这个
 
 很多人使用第三方 API 或本地中转站来跑 Codex 对话，但 Codex Mobile、Remote、插件和额度查询这些能力又依赖 ChatGPT 登录态。手动改配置可以做到“账号继续登录 ChatGPT，对话请求走第三方 API”，但过程很容易写错，也不方便在多个 Provider 之间切换。
@@ -17,6 +25,12 @@ Remote Codex API 把这件事做成一个可视化工具：
 - Codex 继续保留账号登录态，Remote 和插件入口不掉。
 - 实际模型请求切到用户选择的第三方 API。
 - 切换 Provider 后，可以用很轻量的方式恢复本地历史在侧边栏里的可见性。
+
+## Mobile / Remote 体验
+
+配置完成后，Codex Mobile 侧的 Remote 连接流程仍然可以继续使用 ChatGPT 登录态完成安全设置；模型请求则走你在桌面端启用的第三方 API 或本地中转。
+
+<img src="docs/assets/codex-mobile-secure-setup.jpg" alt="Codex Mobile secure setup" width="300" />
 
 ## 它和 Codex Mate 的区别
 
@@ -31,6 +45,16 @@ Remote Codex API 更轻，只做 Provider 与历史管理：
 - 专注于第三方 API 切换、ChatGPT 登录态保留、本地历史同步和 WSL/自定义目录补充。
 
 如果你只需要“第三方 API 也能用 Codex Remote”，用 Remote Codex API 会更直接；如果你需要 Codex 桌面增强和额外 UI 能力，再考虑 Codex Mate。
+
+## 和 Codex Manager 一起使用
+
+Remote Codex API 可以和 Codex Manager 一起使用。推荐分工是：
+
+- Codex Manager 继续作为本地模型网关、路由器或中转服务。
+- Remote Codex API 负责把 Codex 保持在 ChatGPT 登录态，同时把当前 Provider 指向 Codex Manager 暴露的 OpenAI 兼容地址。
+- Remote Codex API 继续负责本地历史 Provider 对齐、备份和恢复。
+
+例如 Codex Manager 在本机提供 OpenAI 兼容接口时，可以把 Remote Codex API 的 API 地址填成本地 `/v1` 地址。遇到代理软件时，建议优先使用 `127.0.0.1`，并确保代理工具不会劫持本地网关流量。
 
 ## 核心功能
 
@@ -132,11 +156,3 @@ Windows 安装包需要在 Windows 环境构建，macOS 应用包需要在 macOS
 - `history_sync` 和启用配置只写本机 Codex 状态。
 - 每次激活配置前会创建备份。
 - token 不会写入 Remote Codex API 自己的 Profile 文件。
-
-## 交流群
-
-扫码加入交流群，交流第三方 API、Codex Remote、历史同步和跨平台使用问题。
-
-![Remote Codex API WeChat group](docs/assets/wechat-group.jpg)
-
-当前二维码有效期至 2026-05-25，过期后会在仓库里更新。
