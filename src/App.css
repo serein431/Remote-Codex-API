@@ -23,6 +23,10 @@
   --bg-surface-3: rgba(255, 255, 255, 0.12);
   --bg-accent: #ffffff;
   --bg-accent-hover: #e0edff;
+  --choice-active-bg: rgba(255, 255, 255, 0.13);
+  --choice-active-border: rgba(255, 255, 255, 0.26);
+  --choice-active-inner: rgba(255, 255, 255, 0.1);
+  --focus-ring: rgba(235, 242, 255, 0.54);
   --text-primary: #ffffff;
   --text-secondary: rgba(255, 255, 255, 0.58);
   --text-tech: rgba(255, 255, 255, 0.28);
@@ -38,6 +42,10 @@
   --bg-surface-3: rgba(0, 0, 0, 0.1);
   --bg-accent: #050608;
   --bg-accent-hover: #1a1e26;
+  --choice-active-bg: rgba(5, 6, 8, 0.08);
+  --choice-active-border: rgba(5, 6, 8, 0.2);
+  --choice-active-inner: rgba(255, 255, 255, 0.78);
+  --focus-ring: rgba(5, 6, 8, 0.34);
   --text-primary: #050608;
   --text-secondary: rgba(0, 0, 0, 0.58);
   --text-tech: rgba(0, 0, 0, 0.32);
@@ -74,6 +82,15 @@ input {
 button {
   border: 0;
   cursor: pointer;
+}
+
+button:focus {
+  outline: none;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
 }
 
 button:disabled {
@@ -655,7 +672,9 @@ button:disabled {
 }
 
 .choice-card.active {
-  background: var(--bg-surface-3);
+  background: var(--choice-active-bg);
+  border-color: var(--choice-active-border);
+  box-shadow: var(--shadow-primary), inset 0 0 0 1px var(--choice-active-inner);
 }
 
 .choice-icon {
