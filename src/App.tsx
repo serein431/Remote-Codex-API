@@ -755,15 +755,24 @@ function App() {
       const historyText = result.history
         ? ` ${result.history.updatedDatabaseRows} / ${result.history.updatedSessionFiles}`
         : "";
+      const launchText = result.codexOpened
+        ? ""
+        : ` ${
+            preferences.language === "zh"
+              ? "Codex 未能自动打开，请从开始菜单手动打开。"
+              : "Codex did not open automatically; launch it from Start or Applications."
+          }`;
       if (result.runtimeStatus) {
         setRuntimeStatus(result.runtimeStatus);
       }
       setCurrentPage("status");
       await refreshAll({ preferredId: saved.id, notify: false });
       if (result.runtimeStatus?.readyForRemote) {
-        setNotice(`${text.activationVerifiedPrefix}: ${saved.name || saved.id}.${historyText}`);
+        setNotice(
+          `${text.activationVerifiedPrefix}: ${saved.name || saved.id}.${historyText}${launchText}`,
+        );
       } else {
-        setNotice(text.activationNeedsCheck);
+        setNotice(`${text.activationNeedsCheck}${launchText}`);
       }
     } finally {
       setBusy(false);

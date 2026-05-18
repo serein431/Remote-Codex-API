@@ -3,6 +3,11 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
+#[cfg(target_os = "windows")]
+use std::collections::HashSet;
+#[cfg(target_os = "windows")]
+use std::fs;
+
 use remote_codex_core::backup::{
     create_backup, list_backups as core_list_backups, restore_backup as core_restore_backup,
     BackupRecord,
@@ -130,8 +135,7 @@ fn activate_profile(id: String, options: ActivationOptions) -> Result<Activation
         None
     };
     let codex_opened = if options.restart_codex {
-        restart_codex().map_err(err)?;
-        true
+        restart_codex().is_ok()
     } else {
         open_codex().is_ok()
     };
@@ -268,19 +272,36 @@ fn open_codex_app() -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
+        let mut launch_failures = Vec::new();
         for candidate in codex_windows_candidates() {
             if candidate.exists() {
-                Command::new(candidate)
-                    .spawn()
-                    .map_err(|error| format!("failed to open Codex.exe: {error}"))?;
-                return Ok(());
+                match Command::new(&candidate).spawn() {
+                    Ok(_) => return Ok(()),
+                    Err(error) => {
+                        launch_failures.push(format!("{} ({error})", candidate.display()));
+                    }
+                }
             }
         }
-        Command::new("cmd")
-            .args(["/C", "start", "", "Codex.exe"])
-            .spawn()
-            .map_err(|error| format!("failed to open Codex.exe: {error}"))?;
-        return Ok(());
+        for command in ["codex.exe", "codex"] {
+            match Command::new(command).spawn() {
+                Ok(_) => return Ok(()),
+                Err(error) => launch_failures.push(format!("{command} ({error})")),
+            }
+        }
+        let searched = codex_windows_candidates()
+            .into_iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let failures = if launch_failures.is_empty() {
+            String::new()
+        } else {
+            format!(" Launch failures: {}.", launch_failures.join("; "))
+        };
+        return Err(format!(
+            "Codex executable could not be opened. Install Codex or ensure codex.exe is on PATH.{failures} Searched: {searched}"
+        ));
     }
     #[allow(unreachable_code)]
     Err("Remote Codex API currently supports launching Codex on macOS and Windows".to_string())
@@ -315,10 +336,12 @@ fn stop_codex_processes() -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
-        Command::new("taskkill")
-            .args(["/IM", "Codex.exe", "/T", "/F"])
-            .status()
-            .map_err(|error| format!("failed to stop Codex.exe: {error}"))?;
+        for image in ["codex.exe", "Codex.exe"] {
+            Command::new("taskkill")
+                .args(["/IM", image, "/T", "/F"])
+                .status()
+                .map_err(|error| format!("failed to stop {image}: {error}"))?;
+        }
         return Ok(());
     }
     #[allow(unreachable_code)]
@@ -354,14 +377,21 @@ fn codex_macos_candidates() -> Vec<PathBuf> {
 #[cfg(target_os = "windows")]
 fn codex_windows_candidates() -> Vec<PathBuf> {
     let mut paths = Vec::new();
+    paths.extend(windows_path_candidates("codex.exe"));
     push_windows_candidates(
         &mut paths,
         "LOCALAPPDATA",
         &[
+            r"OpenAI\Codex\bin\codex.exe",
+            r"OpenAI\Codex\codex.exe",
             r"Programs\Codex\Codex.exe",
+            r"Programs\Codex\codex.exe",
             r"Programs\OpenAI Codex\Codex.exe",
+            r"Programs\OpenAI Codex\codex.exe",
             r"Codex\Codex.exe",
+            r"Codex\codex.exe",
             r"OpenAI Codex\Codex.exe",
+            r"OpenAI Codex\codex.exe",
         ],
     );
     push_windows_candidates(
@@ -376,9 +406,13 @@ fn codex_windows_candidates() -> Vec<PathBuf> {
     );
     if let Some(home) = dirs::home_dir() {
         paths.push(home.join(r"AppData\Local\Programs\Codex\Codex.exe"));
+        paths.push(home.join(r"AppData\Local\Programs\Codex\codex.exe"));
         paths.push(home.join(r"AppData\Local\Programs\OpenAI Codex\Codex.exe"));
+        paths.push(home.join(r"AppData\Local\Programs\OpenAI Codex\codex.exe"));
+        paths.push(home.join(r"AppData\Local\OpenAI\Codex\bin\codex.exe"));
     }
-    paths
+    paths.extend(windows_store_codex_candidates());
+    dedupe_paths(paths)
 }
 
 #[cfg(target_os = "windows")]
@@ -389,6 +423,62 @@ fn push_windows_candidates(paths: &mut Vec<PathBuf>, env_var: &str, relatives: &
     for relative in relatives {
         paths.push(base.join(relative));
     }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_path_candidates(command: &str) -> Vec<PathBuf> {
+    let Ok(output) = Command::new("where.exe").arg(command).output() else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_store_codex_candidates() -> Vec<PathBuf> {
+    let Some(program_files) = std::env::var_os("PROGRAMFILES").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    let windows_apps = program_files.join("WindowsApps");
+    let Ok(entries) = fs::read_dir(windows_apps) else {
+        return Vec::new();
+    };
+    let mut packages = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("OpenAI.Codex_")
+        })
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    packages.sort_by(|left, right| right.cmp(left));
+
+    let mut paths = Vec::new();
+    for package in packages {
+        paths.push(package.join(r"app\resources\codex.exe"));
+        paths.push(package.join(r"app\codex.exe"));
+        paths.push(package.join(r"app\Codex.exe"));
+        paths.push(package.join("codex.exe"));
+    }
+    paths
+}
+
+#[cfg(target_os = "windows")]
+fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    paths
+        .into_iter()
+        .filter(|path| seen.insert(path.to_string_lossy().to_lowercase()))
+        .collect()
 }
 
 fn show_main_window(app: &tauri::AppHandle) {

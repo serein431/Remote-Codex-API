@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -51,6 +51,12 @@ pub struct HistorySyncResult {
 #[serde(rename_all = "camelCase")]
 pub struct HistorySyncOptions {
     pub custom_workspace_roots: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SessionFileMetadata {
+    cwd: Option<String>,
+    timestamp_ms: Option<i64>,
 }
 
 pub fn read_current_profile(paths: &CodexPaths) -> Result<CurrentCodexProfile> {
@@ -247,9 +253,10 @@ fn update_session_files(paths: &CodexPaths, profile: &CurrentCodexProfile) -> Re
 }
 
 fn merge_session_index(paths: &CodexPaths) -> Result<bool> {
-    let db_entries = active_thread_index_entries(paths)?;
+    let file_metadata = session_file_metadata(paths);
+    let db_entries = active_thread_index_entries(paths, &file_metadata)?;
     let existing_entries = read_session_index_entries(paths)?;
-    let file_ids = session_file_thread_ids(paths);
+    let file_ids = file_metadata.keys().cloned().collect::<HashSet<_>>();
     let existing_by_id = existing_entries
         .iter()
         .filter_map(|entry| {
@@ -306,7 +313,10 @@ fn merge_session_index(paths: &CodexPaths) -> Result<bool> {
     Ok(true)
 }
 
-fn active_thread_index_entries(paths: &CodexPaths) -> Result<Vec<Value>> {
+fn active_thread_index_entries(
+    paths: &CodexPaths,
+    file_metadata: &HashMap<String, SessionFileMetadata>,
+) -> Result<Vec<Value>> {
     let conn =
         Connection::open_with_flags(&paths.db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     if !table_exists(&conn, "threads")? {
@@ -362,7 +372,9 @@ fn active_thread_index_entries(paths: &CodexPaths) -> Result<Vec<Value>> {
             .as_deref()
             .filter(|path| !path.is_empty())
             .and_then(|path| latest_session_timestamp_ms(Path::new(path)));
+        let session_ms = file_metadata.get(&id).and_then(|meta| meta.timestamp_ms);
         let timestamp = rollout_ms
+            .or(session_ms)
             .or(updated_at_ms)
             .or_else(|| updated_at.map(|value| value * 1000))
             .unwrap_or(0);
@@ -379,8 +391,9 @@ fn active_thread_index_entries(paths: &CodexPaths) -> Result<Vec<Value>> {
 }
 
 fn sync_global_state(paths: &CodexPaths, custom_workspace_roots: &[String]) -> Result<bool> {
-    let file_ids = session_file_thread_ids(paths);
-    let entries = active_thread_ui_entries(paths, &file_ids)?;
+    let file_metadata = session_file_metadata(paths);
+    let file_ids = file_metadata.keys().cloned().collect::<HashSet<_>>();
+    let entries = active_thread_ui_entries(paths, &file_ids, &file_metadata)?;
     let mut state = if paths.global_state_path.exists() {
         serde_json::from_str::<Value>(&fs::read_to_string(&paths.global_state_path)?)?
     } else {
@@ -393,6 +406,7 @@ fn sync_global_state(paths: &CodexPaths, custom_workspace_roots: &[String]) -> R
     object.remove("thread-workspace-root-hints");
     object.remove("project-order");
     object.remove("electron-saved-workspace-roots");
+    object.remove("active-workspace-roots");
     object.remove("projectless-thread-ids");
     let mut hints = Map::new();
     let mut project_order = BTreeSet::new();
@@ -428,6 +442,10 @@ fn sync_global_state(paths: &CodexPaths, custom_workspace_roots: &[String]) -> R
     );
     object.insert(
         "electron-saved-workspace-roots".to_string(),
+        string_set_to_value(saved_roots.clone()),
+    );
+    object.insert(
+        "active-workspace-roots".to_string(),
         string_set_to_value(saved_roots),
     );
     object.insert(
@@ -446,6 +464,7 @@ fn sync_global_state(paths: &CodexPaths, custom_workspace_roots: &[String]) -> R
 fn active_thread_ui_entries(
     paths: &CodexPaths,
     valid_thread_ids: &HashSet<String>,
+    file_metadata: &HashMap<String, SessionFileMetadata>,
 ) -> Result<Vec<(String, String)>> {
     let conn =
         Connection::open_with_flags(&paths.db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -473,8 +492,14 @@ fn active_thread_ui_entries(
     })?;
     let mut entries = Vec::new();
     for row in rows {
-        let (id, cwd) = row?;
+        let (id, mut cwd) = row?;
         if valid_thread_ids.contains(&id) {
+            if cwd.trim().is_empty() {
+                cwd = file_metadata
+                    .get(&id)
+                    .and_then(|meta| meta.cwd.clone())
+                    .unwrap_or_default();
+            }
             entries.push((id, cwd));
         }
     }
@@ -499,10 +524,10 @@ fn read_session_index_entries(paths: &CodexPaths) -> Result<Vec<Value>> {
     Ok(entries)
 }
 
-fn session_file_thread_ids(paths: &CodexPaths) -> HashSet<String> {
-    let mut ids = HashSet::new();
+fn session_file_metadata(paths: &CodexPaths) -> HashMap<String, SessionFileMetadata> {
+    let mut metadata = HashMap::new();
     for path in session_files(paths) {
-        let Ok(text) = fs::read_to_string(path) else {
+        let Ok(text) = fs::read_to_string(&path) else {
             continue;
         };
         let Some((first, _, _)) = split_first_line(&text) else {
@@ -511,13 +536,28 @@ fn session_file_thread_ids(paths: &CodexPaths) -> HashSet<String> {
         let Ok(value) = serde_json::from_str::<Value>(first) else {
             continue;
         };
-        if value.get("type").and_then(Value::as_str) == Some("session_meta") {
-            if let Some(id) = value.pointer("/payload/id").and_then(Value::as_str) {
-                ids.insert(id.to_string());
-            }
+        if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
         }
+        let Some(id) = value.pointer("/payload/id").and_then(Value::as_str) else {
+            continue;
+        };
+        let cwd = value
+            .pointer("/payload/cwd")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|cwd| !cwd.is_empty())
+            .map(str::to_string);
+        let timestamp_ms = latest_session_timestamp_ms(&path).or_else(|| item_timestamp_ms(&value));
+        let entry = metadata
+            .entry(id.to_string())
+            .or_insert_with(SessionFileMetadata::default);
+        if entry.cwd.is_none() {
+            entry.cwd = cwd;
+        }
+        entry.timestamp_ms = entry.timestamp_ms.max(timestamp_ms);
     }
-    ids
+    metadata
 }
 
 fn session_files(paths: &CodexPaths) -> Vec<PathBuf> {

@@ -75,19 +75,27 @@ fn create_threads_db(home: &Path) {
 }
 
 fn write_session(home: &Path, id: &str, provider: &str, model: &str) {
+    write_session_with_cwd(home, id, provider, model, None);
+}
+
+fn write_session_with_cwd(home: &Path, id: &str, provider: &str, model: &str, cwd: Option<&str>) {
     let dir = home.join("sessions/2026/05/16");
     fs::create_dir_all(&dir).unwrap();
+    let mut payload = json!({
+        "id": id,
+        "model_provider": provider,
+        "model": model
+    });
+    if let Some(cwd) = cwd {
+        payload["cwd"] = json!(cwd);
+    }
     fs::write(
         dir.join(format!("rollout-2026-05-16T00-00-00-{id}.jsonl")),
         format!(
             "{}\n{}\n",
             json!({
                 "type": "session_meta",
-                "payload": {
-                    "id": id,
-                    "model_provider": provider,
-                    "model": model
-                }
+                "payload": payload
             }),
             json!({"type":"event_msg","timestamp":"2026-05-16T01:00:00Z"})
         ),
@@ -389,6 +397,51 @@ fn history_sync_skips_database_threads_without_session_files() {
     assert!(global_state.contains("/work/real"));
     assert!(!global_state.contains("/work/empty"));
     assert!(!global_state.contains("empty-project"));
+}
+
+#[test]
+fn history_sync_uses_session_metadata_cwd_when_database_cwd_is_blank() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join(".codex");
+    write_config(&home, CODEX_PROVIDER_BUCKET_ID, "gpt-5.4");
+    fs::create_dir_all(&home).unwrap();
+    let conn = Connection::open(home.join("state_5.sqlite")).unwrap();
+    conn.execute_batch(
+        r#"
+        CREATE TABLE threads (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            rollout_path TEXT,
+            cwd TEXT,
+            updated_at INTEGER,
+            updated_at_ms INTEGER,
+            archived INTEGER DEFAULT 0,
+            model_provider TEXT,
+            model TEXT
+        );
+        INSERT INTO threads VALUES
+          ('windows-thread', 'Windows Thread', '', '', 100, 100000, 0, 'old', 'gpt-old');
+        "#,
+    )
+    .unwrap();
+    write_session_with_cwd(
+        &home,
+        "windows-thread",
+        "old",
+        "gpt-old",
+        Some(r"C:\Mac\Home\Documents\Project"),
+    );
+    fs::write(home.join("session_index.jsonl"), "").unwrap();
+    fs::write(home.join(".codex-global-state.json"), "{}").unwrap();
+    let paths = CodexPaths::from_home(&home);
+
+    let result = sync_history(&paths).unwrap();
+
+    assert!(result.updated_global_state);
+    let global_state = fs::read_to_string(home.join(".codex-global-state.json")).unwrap();
+    assert!(global_state.contains(r"C:\\Mac\\Home\\Documents\\Project"));
+    assert!(global_state.contains("active-workspace-roots"));
+    assert!(global_state.contains("thread-workspace-root-hints"));
 }
 
 #[test]
