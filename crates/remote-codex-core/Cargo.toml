@@ -1,0 +1,20 @@
+[package]
+name = "remote-codex-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core profile, config, history, and backup logic for Remote Codex API"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+dirs = "6"
+keyring = "3"
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml_edit = "0.23"
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
