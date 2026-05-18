@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build assets for
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-assets:
+    name: Build release assets on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build macOS app bundle
+        if: runner.os == 'macOS'
+        run: |
+          npm run tauri -- build --bundles app
+          mkdir -p release-assets
+          ditto -c -k --sequesterRsrc --keepParent \
+            "target/release/bundle/macos/Remote Codex API.app" \
+            "release-assets/Remote-Codex-API_${RELEASE_TAG}_macOS.app.zip"
+
+      - name: Build Windows installers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          npm run tauri -- build --bundles "nsis,msi"
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          Get-ChildItem target/release/bundle -Recurse -Include *.exe,*.msi | ForEach-Object {
+            Copy-Item $_.FullName "release-assets/Remote-Codex-API_${env:RELEASE_TAG}_Windows_$($_.Name)"
+          }
+
+      - name: Upload release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          files=(release-assets/*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No release assets were generated."
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
