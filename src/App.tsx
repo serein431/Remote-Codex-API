@@ -549,6 +549,7 @@ function App() {
   useEffect(() => {
     savePreferences(preferences);
     document.documentElement.setAttribute("data-theme", preferences.theme);
+    document.documentElement.style.colorScheme = preferences.theme;
     document.documentElement.lang = preferences.language === "zh" ? "zh-CN" : "en";
   }, [preferences]);
 
@@ -1330,10 +1331,17 @@ function detectLanguage(): Language {
   return "en";
 }
 
+function detectTheme(): Theme {
+  if (typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: light)").matches) {
+    return "light";
+  }
+  return "dark";
+}
+
 function loadPreferences(): Preferences {
   const defaults: Preferences = {
     language: detectLanguage(),
-    theme: "dark",
+    theme: detectTheme(),
     onboarded: false,
   };
   if (typeof window === "undefined") return defaults;
@@ -1341,10 +1349,11 @@ function loadPreferences(): Preferences {
     const raw = window.localStorage.getItem(PREFERENCES_STORAGE_KEY);
     if (!raw) return defaults;
     const parsed = JSON.parse(raw) as Partial<Preferences>;
+    const onboarded = Boolean(parsed.onboarded);
     return {
       language: parsed.language === "zh" || parsed.language === "en" ? parsed.language : defaults.language,
-      theme: parsed.theme === "light" || parsed.theme === "dark" ? parsed.theme : defaults.theme,
-      onboarded: Boolean(parsed.onboarded),
+      theme: onboarded && (parsed.theme === "light" || parsed.theme === "dark") ? parsed.theme : defaults.theme,
+      onboarded,
     };
   } catch {
     return defaults;

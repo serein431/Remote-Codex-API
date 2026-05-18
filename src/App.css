@@ -17,6 +17,7 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --bg-base: #030407;
   --bg-surface-1: rgba(255, 255, 255, 0.03);
   --bg-surface-2: rgba(255, 255, 255, 0.06);
@@ -36,6 +37,7 @@
 }
 
 [data-theme="light"] {
+  color-scheme: light;
   --bg-base: #f5f7fa;
   --bg-surface-1: rgba(255, 255, 255, 0.66);
   --bg-surface-2: rgba(0, 0, 0, 0.05);
