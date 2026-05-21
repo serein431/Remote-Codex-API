@@ -14,6 +14,11 @@ Remote Codex API 是一个轻量桌面托盘工具。它不会注入 Codex UI，
 
 当前二维码有效期至 2026-05-25，过期后会在仓库里更新。
 
+## 友情链接
+
+- [LINUX DO](https://linux.do/)：很有活力的开发者社区，本项目也欢迎来自 LINUX DO 的佬友交流和监督。
+- [Codex Mate](https://github.com/serein431/Codex-Mate)：偏桌面增强的 Codex 伴侣工具，适合需要启动器、辅助菜单和 Codex UI 增强的场景。
+
 ## 为什么做这个
 
 很多人使用第三方 API 或本地中转站来跑 Codex 对话，但 Codex Mobile、Remote、插件和额度查询这些能力又依赖 ChatGPT 登录态。手动改配置可以做到“账号继续登录 ChatGPT，对话请求走第三方 API”，但过程很容易写错，也不方便在多个 Provider 之间切换。
