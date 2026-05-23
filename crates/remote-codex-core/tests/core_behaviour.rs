@@ -3,7 +3,7 @@ use std::path::Path;
 
 use remote_codex_core::backup::{create_backup, restore_backup};
 use remote_codex_core::codex_auth::apply_chatgpt_auth;
-use remote_codex_core::codex_config::apply_provider_config;
+use remote_codex_core::codex_config::{apply_provider_config, clear_remote_provider_config};
 use remote_codex_core::codex_status::codex_runtime_status;
 use remote_codex_core::history::{
     history_status, sync_history, sync_history_with_options, HistorySyncOptions,
@@ -170,6 +170,70 @@ custom_setting = "keep-me"
     assert!(text.contains("name = \"JMRAI\""));
     assert!(text.contains("base_url = \"https://jmrai.net/v1\""));
     assert!(text.contains("custom_setting = \"keep-me\""));
+}
+
+#[test]
+fn clearing_remote_provider_removes_only_remote_bucket_and_active_provider() {
+    let temp = TempDir::new().unwrap();
+    let config = temp.path().join("config.toml");
+    fs::write(
+        &config,
+        format!(
+            r#"approval_policy = "never"
+model_provider = "{CODEX_PROVIDER_BUCKET_ID}"
+model = "gpt-5.5"
+
+[model_providers.{CODEX_PROVIDER_BUCKET_ID}]
+name = "Remote Codex API"
+base_url = "https://remote.example/v1"
+experimental_bearer_token = "secret-token"
+
+[model_providers.keep_me]
+name = "Keep Me"
+base_url = "https://keep.example/v1"
+"#
+        ),
+    )
+    .unwrap();
+
+    clear_remote_provider_config(&config).unwrap();
+
+    let text = fs::read_to_string(config).unwrap();
+    assert!(text.contains("approval_policy = \"never\""));
+    assert!(text.contains("model = \"gpt-5.5\""));
+    assert!(!text.contains(&format!("model_provider = \"{CODEX_PROVIDER_BUCKET_ID}\"")));
+    assert!(!text.contains(&format!("[model_providers.{CODEX_PROVIDER_BUCKET_ID}]")));
+    assert!(!text.contains("secret-token"));
+    assert!(text.contains("[model_providers.keep_me]"));
+}
+
+#[test]
+fn clearing_remote_provider_preserves_unrelated_active_provider() {
+    let temp = TempDir::new().unwrap();
+    let config = temp.path().join("config.toml");
+    fs::write(
+        &config,
+        format!(
+            r#"model_provider = "custom"
+
+[model_providers.custom]
+name = "Custom"
+
+[model_providers.{CODEX_PROVIDER_BUCKET_ID}]
+name = "Remote Codex API"
+experimental_bearer_token = "secret-token"
+"#
+        ),
+    )
+    .unwrap();
+
+    clear_remote_provider_config(&config).unwrap();
+
+    let text = fs::read_to_string(config).unwrap();
+    assert!(text.contains("model_provider = \"custom\""));
+    assert!(text.contains("[model_providers.custom]"));
+    assert!(!text.contains(&format!("[model_providers.{CODEX_PROVIDER_BUCKET_ID}]")));
+    assert!(!text.contains("secret-token"));
 }
 
 #[test]

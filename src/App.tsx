@@ -1,5 +1,6 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Archive,
   ArrowClockwise,
@@ -68,6 +69,34 @@ type CodexRuntimeStatus = {
   readyForRemote: boolean;
 };
 
+type DiagnosticsReport = {
+  appVersion: string;
+  platform: string;
+  codexHome: string;
+  configPath: string;
+  authPath: string;
+  databasePath: string;
+  sessionsPath: string;
+  sessionIndexPath: string;
+  globalStatePath: string;
+  configExists: boolean;
+  authExists: boolean;
+  databaseExists: boolean;
+  sessionsExists: boolean;
+  sessionIndexExists: boolean;
+  globalStateExists: boolean;
+  backupCount: number;
+  profileCount: number;
+  customRootCount: number;
+  codexInstallFound: boolean;
+  codexInstallCandidates: string[];
+  codexProcessCount: number;
+  runtimeStatus?: CodexRuntimeStatus | null;
+  runtimeError?: string | null;
+  historyStatus?: HistoryStatus | null;
+  historyError?: string | null;
+};
+
 type BackupRecord = {
   id: string;
   label: string;
@@ -97,10 +126,24 @@ type ActivationResult = {
   } | null;
 };
 
+type ClearApiModeResult = {
+  ok: boolean;
+  backupId: string;
+  codexOpened: boolean;
+  runtimeStatus: CodexRuntimeStatus;
+};
+
 type VisibleFieldErrors = Partial<Record<"name" | "baseUrl" | "model", string>>;
 type Language = "zh" | "en";
 type Theme = "dark" | "light";
 type AppPage = "setup" | "profiles" | "history" | "guide" | "status";
+
+type UpdateStatus =
+  | { state: "idle" }
+  | { state: "checking" }
+  | { state: "current"; latestVersion: string; releaseUrl: string }
+  | { state: "available"; latestVersion: string; releaseUrl: string }
+  | { state: "error"; message: string };
 
 type Preferences = {
   language: Language;
@@ -109,6 +152,9 @@ type Preferences = {
 };
 
 const PREFERENCES_STORAGE_KEY = "remote-codex-api.preferences.v1";
+const APP_VERSION = "0.1.0";
+const RELEASE_API_URL = "https://api.github.com/repos/serein431/Remote-Codex-API/releases/latest";
+const RELEASES_URL = "https://github.com/serein431/Remote-Codex-API/releases";
 const previewCreatedAt = "2026-05-16T09:10:00.000Z";
 
 const previewProfiles: ProfileRecord[] = [
@@ -163,6 +209,32 @@ const previewRuntimeStatus: CodexRuntimeStatus = {
   providerRequiresOpenaiAuth: true,
   providerHasBearerToken: true,
   readyForRemote: true,
+};
+
+const previewDiagnostics: DiagnosticsReport = {
+  appVersion: APP_VERSION,
+  platform: "preview",
+  codexHome: "~/.codex",
+  configPath: "~/.codex/config.toml",
+  authPath: "~/.codex/auth.json",
+  databasePath: "~/.codex/state_5.sqlite",
+  sessionsPath: "~/.codex/sessions",
+  sessionIndexPath: "~/.codex/session_index.jsonl",
+  globalStatePath: "~/.codex/.codex-global-state.json",
+  configExists: true,
+  authExists: true,
+  databaseExists: true,
+  sessionsExists: true,
+  sessionIndexExists: true,
+  globalStateExists: true,
+  backupCount: 11,
+  profileCount: 2,
+  customRootCount: 1,
+  codexInstallFound: true,
+  codexInstallCandidates: ["/Applications/Codex.app"],
+  codexProcessCount: 1,
+  runtimeStatus: previewRuntimeStatus,
+  historyStatus: previewStatus,
 };
 
 const previewBackups: BackupRecord[] = [
@@ -267,6 +339,33 @@ const copy = {
     requiresAuthLabel: "requires_openai_auth = true",
     currentConfigTitle: "当前读取到",
     statusRefreshHint: "启用后如果这里仍未就绪，说明 Codex 文件没有写到位。",
+    clearApiTitle: "回到官方登录态",
+    clearApiIntro: "会先备份，再移除 Remote Codex API 的 Provider 和明文 token，auth.json 继续保持 ChatGPT 登录。",
+    clearApiMode: "清除 API 模式",
+    clearApiConfirm: "这会备份当前 Codex 文件，并移除 Remote Codex API 写入的 Provider。继续吗？",
+    clearApiNotice: "已清除 API 模式，Codex 已回到 ChatGPT 登录态。",
+    clearApiBackupNotice: "已清除 API 模式，备份：",
+    diagnosticsTitle: "诊断报告",
+    diagnosticsIntro: "复制给 issue 或自己排查用；不会输出 bearer token。",
+    diagnosticsCopy: "复制诊断",
+    diagnosticsCopied: "诊断报告已复制。",
+    diagnosticsInstall: "Codex 安装",
+    diagnosticsProcess: "Codex 进程",
+    diagnosticsProfiles: "配置数",
+    diagnosticsRoots: "自定义目录",
+    diagnosticsBackups: "备份数",
+    diagnosticsFiles: "关键文件",
+    updateTitle: "更新检查",
+    updateIntro: "从 GitHub Release 检查新版本。",
+    updateCheck: "检查更新",
+    updateOpen: "打开 Release",
+    updateCurrent: "当前已经是最新版。",
+    updateAvailable: "发现新版本",
+    updateFailed: "检查更新失败。",
+    currentVersion: "当前版本",
+    latestVersion: "最新版本",
+    compatibilityTitle: "增强能力边界",
+    compatibilityIntro: "Remote Codex API 专注登录态、Provider 和历史同步。会话删除、导出、移动、Timeline、脚本注入这类桌面增强，建议和 Codex Mate 搭配使用。",
     keepLogin: "保留 ChatGPT 登录",
     keychainSaved: "Key 存进系统钥匙串",
     launchOptions: "启用时选项",
@@ -420,6 +519,33 @@ const copy = {
     requiresAuthLabel: "requires_openai_auth = true",
     currentConfigTitle: "Currently detected",
     statusRefreshHint: "If this is still not ready after activation, Codex files were not written correctly.",
+    clearApiTitle: "Return to official login",
+    clearApiIntro: "Creates a backup, removes the Remote Codex API provider and plaintext token, and keeps auth.json in ChatGPT login mode.",
+    clearApiMode: "Clear API mode",
+    clearApiConfirm: "This backs up current Codex files and removes the provider written by Remote Codex API. Continue?",
+    clearApiNotice: "API mode cleared. Codex is back on ChatGPT login.",
+    clearApiBackupNotice: "API mode cleared. Backup:",
+    diagnosticsTitle: "Diagnostics report",
+    diagnosticsIntro: "Copy this for issues or troubleshooting. Bearer tokens are never included.",
+    diagnosticsCopy: "Copy diagnostics",
+    diagnosticsCopied: "Diagnostics copied.",
+    diagnosticsInstall: "Codex install",
+    diagnosticsProcess: "Codex process",
+    diagnosticsProfiles: "Profiles",
+    diagnosticsRoots: "Custom roots",
+    diagnosticsBackups: "Backups",
+    diagnosticsFiles: "Key files",
+    updateTitle: "Update check",
+    updateIntro: "Checks GitHub Releases for a newer build.",
+    updateCheck: "Check updates",
+    updateOpen: "Open Releases",
+    updateCurrent: "You are on the latest release.",
+    updateAvailable: "New version available",
+    updateFailed: "Update check failed.",
+    currentVersion: "Current version",
+    latestVersion: "Latest version",
+    compatibilityTitle: "Enhancement boundary",
+    compatibilityIntro: "Remote Codex API focuses on login state, providers, and history sync. Desktop enhancements such as delete, export, move, Timeline, and script injection are better paired with Codex Mate.",
     keepLogin: "Keep ChatGPT login",
     keychainSaved: "Key stored in system keychain",
     launchOptions: "Activation options",
@@ -501,6 +627,8 @@ function App() {
   const [token, setToken] = useState("");
   const [status, setStatus] = useState<HistoryStatus | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<CodexRuntimeStatus | null>(null);
+  const [diagnosticsReport, setDiagnosticsReport] = useState<DiagnosticsReport | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ state: "idle" });
   const [backups, setBackups] = useState<BackupRecord[]>([]);
   const [historyRoots, setHistoryRoots] = useState<CustomHistoryRoot[]>([]);
   const [rootLabel, setRootLabel] = useState("");
@@ -582,6 +710,7 @@ function App() {
     if (name === "list_backups") return previewBackups as T;
     if (name === "history_status") return previewStatus as T;
     if (name === "codex_status") return previewRuntimeStatus as T;
+    if (name === "diagnostics") return previewDiagnostics as T;
     if (name === "list_history_roots") return previewHistoryRoots as T;
     if (name === "save_history_root") return previewHistoryRoots as T;
     if (name === "delete_history_root") return [] as T;
@@ -612,24 +741,40 @@ function App() {
         },
       } as T;
     }
+    if (name === "clear_api_mode") {
+      return {
+        ok: true,
+        backupId: "preview-clear-api-mode",
+        codexOpened: true,
+        runtimeStatus: {
+          ...previewRuntimeStatus,
+          currentProvider: "",
+          providerConfigured: false,
+          providerHasBearerToken: false,
+          readyForRemote: false,
+        },
+      } as T;
+    }
     throw new Error("This action is available in the desktop app.");
   }
 
   async function refreshAll(options: { adoptFirstProfile?: boolean; preferredId?: string; notify?: boolean } = {}) {
     setBusy(true);
     try {
-      const [nextProfiles, nextStatus, nextRuntimeStatus, nextBackups, nextHistoryRoots] = await Promise.all([
+      const [nextProfiles, nextStatus, nextRuntimeStatus, nextBackups, nextHistoryRoots, nextDiagnostics] = await Promise.all([
         call<ProfileRecord[]>("list_profiles"),
         call<HistoryStatus>("history_status", { codexHome: resolvedDraft.codexHome }),
         call<CodexRuntimeStatus>("codex_status", { codexHome: resolvedDraft.codexHome }),
         call<BackupRecord[]>("list_backups"),
         call<CustomHistoryRoot[]>("list_history_roots"),
+        call<DiagnosticsReport>("diagnostics", { codexHome: resolvedDraft.codexHome }),
       ]);
       setProfiles(nextProfiles);
       setStatus(nextStatus);
       setRuntimeStatus(nextRuntimeStatus);
       setBackups(nextBackups);
       setHistoryRoots(nextHistoryRoots);
+      setDiagnosticsReport(nextDiagnostics);
 
       const profileToLoad =
         nextProfiles.find((profile) => profile.id === options.preferredId) ||
@@ -787,6 +932,71 @@ function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function clearApiMode() {
+    if (typeof window !== "undefined" && !window.confirm(text.clearApiConfirm)) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await call<ClearApiModeResult>("clear_api_mode", {
+        options: {
+          restartCodex: restartOnActivate,
+          codexHome: resolvedDraft.codexHome,
+        },
+      });
+      setRuntimeStatus(result.runtimeStatus);
+      setNotice(`${text.clearApiBackupNotice} ${result.backupId}`);
+      await refreshAll({ preferredId: resolvedDraft.id, notify: false });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function checkForUpdates() {
+    setUpdateStatus({ state: "checking" });
+    try {
+      const response = await fetch(RELEASE_API_URL, {
+        headers: { Accept: "application/vnd.github+json" },
+      });
+      if (!response.ok) {
+        throw new Error(`${response.status} ${response.statusText}`);
+      }
+      const release = (await response.json()) as {
+        tag_name?: string;
+        html_url?: string;
+      };
+      const latestVersion = normalizeVersion(release.tag_name || "");
+      const releaseUrl = release.html_url || RELEASES_URL;
+      setUpdateStatus({
+        state: compareVersions(latestVersion, APP_VERSION) > 0 ? "available" : "current",
+        latestVersion,
+        releaseUrl,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setUpdateStatus({ state: "error", message: `${text.updateFailed} ${message}` });
+    }
+  }
+
+  async function copyDiagnostics() {
+    const reportText = formatDiagnosticsReport(diagnosticsReport, updateStatus, preferences.language);
+    try {
+      await navigator.clipboard.writeText(reportText);
+      setNotice(text.diagnosticsCopied);
+    } catch {
+      setError(reportText);
+    }
+  }
+
+  async function openReleasePage() {
+    const url = "releaseUrl" in updateStatus ? updateStatus.releaseUrl : RELEASES_URL;
+    if (runningInTauri()) {
+      await openUrl(url);
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   async function syncHistory() {
@@ -1288,10 +1498,16 @@ function App() {
                 text={text}
                 status={runtimeStatus}
                 historyStatus={status}
+                diagnosticsReport={diagnosticsReport}
+                updateStatus={updateStatus}
                 backups={backups}
                 mismatchCount={mismatchCount}
                 onRefresh={() => refreshAll()}
                 onSyncHistory={syncHistory}
+                onClearApiMode={clearApiMode}
+                onCheckUpdates={checkForUpdates}
+                onCopyDiagnostics={copyDiagnostics}
+                onOpenReleases={openReleasePage}
                 onRestoreBackup={restoreBackup}
                 busy={busy}
                 language={preferences.language}
@@ -1762,10 +1978,16 @@ function RuntimeStatusPage({
   text,
   status,
   historyStatus,
+  diagnosticsReport,
+  updateStatus,
   backups,
   mismatchCount,
   onRefresh,
   onSyncHistory,
+  onClearApiMode,
+  onCheckUpdates,
+  onCopyDiagnostics,
+  onOpenReleases,
   onRestoreBackup,
   busy,
   language,
@@ -1773,15 +1995,22 @@ function RuntimeStatusPage({
   text: (typeof copy)["zh"] | (typeof copy)["en"];
   status: CodexRuntimeStatus | null;
   historyStatus: HistoryStatus | null;
+  diagnosticsReport: DiagnosticsReport | null;
+  updateStatus: UpdateStatus;
   backups: BackupRecord[];
   mismatchCount: number;
   onRefresh: () => void;
   onSyncHistory: () => void;
+  onClearApiMode: () => void;
+  onCheckUpdates: () => void;
+  onCopyDiagnostics: () => void;
+  onOpenReleases: () => void;
   onRestoreBackup: (id: string) => void;
   busy: boolean;
   language: Language;
 }) {
   const ready = Boolean(status?.readyForRemote);
+  const updateMessage = updateStatusMessage(updateStatus, text);
   return (
     <section className="panel-page status-page">
       <div className="panel-header">
@@ -1838,6 +2067,88 @@ function RuntimeStatusPage({
           </button>
         )}
       </div>
+
+      <section className="write-card">
+        <div className="support-card-header">
+          <div>
+            <small>{text.clearApiTitle}</small>
+            <strong>{text.clearApiMode}</strong>
+          </div>
+          <LockKey size={16} weight="bold" />
+        </div>
+        <p className="section-copy">{text.clearApiIntro}</p>
+        <button className="secondary-button full-width" type="button" onClick={onClearApiMode} disabled={busy}>
+          <ClockCounterClockwise size={15} weight="bold" />
+          {text.clearApiMode}
+        </button>
+      </section>
+
+      <section className="write-card">
+        <div className="support-card-header">
+          <div>
+            <small>{text.updateTitle}</small>
+            <strong>{updateMessage}</strong>
+          </div>
+          <ArrowClockwise size={16} weight="bold" />
+        </div>
+        <p className="section-copy">{text.updateIntro}</p>
+        <dl className="metric-list">
+          <Metric label={text.currentVersion} value={APP_VERSION} />
+          <Metric
+            label={text.latestVersion}
+            value={"latestVersion" in updateStatus ? updateStatus.latestVersion : "-"}
+          />
+        </dl>
+        <div className="status-actions">
+          <button className="support-action" type="button" onClick={onCheckUpdates} disabled={busy || updateStatus.state === "checking"}>
+            <ArrowClockwise size={15} weight="bold" />
+            {text.updateCheck}
+          </button>
+          <button className="secondary-button" type="button" onClick={onOpenReleases}>
+            {text.updateOpen}
+          </button>
+        </div>
+      </section>
+
+      <section className="write-card">
+        <div className="support-card-header">
+          <div>
+            <small>{text.diagnosticsTitle}</small>
+            <strong>{diagnosticsReport?.platform || "-"}</strong>
+          </div>
+          <TerminalWindow size={16} weight="bold" />
+        </div>
+        <p className="section-copy">{text.diagnosticsIntro}</p>
+        <dl className="metric-list">
+          <Metric label={text.diagnosticsInstall} value={diagnosticsReport?.codexInstallFound ? text.readyLabel : text.missingLabel} />
+          <Metric label={text.diagnosticsProcess} value={diagnosticsReport ? String(diagnosticsReport.codexProcessCount) : "-"} />
+          <Metric label={text.diagnosticsProfiles} value={diagnosticsReport ? String(diagnosticsReport.profileCount) : "-"} />
+          <Metric label={text.diagnosticsBackups} value={diagnosticsReport ? String(diagnosticsReport.backupCount) : "-"} />
+          <Metric label={text.diagnosticsRoots} value={diagnosticsReport ? String(diagnosticsReport.customRootCount) : "-"} />
+        </dl>
+        <div className="diagnostic-file-grid">
+          {diagnosticFileRows(diagnosticsReport, text).map((item) => (
+            <span className={item.ok ? "ok" : "missing"} key={item.label}>
+              {item.label}
+            </span>
+          ))}
+        </div>
+        <button className="secondary-button full-width" type="button" onClick={onCopyDiagnostics} disabled={busy || !diagnosticsReport}>
+          <FloppyDisk size={15} weight="bold" />
+          {text.diagnosticsCopy}
+        </button>
+      </section>
+
+      <section className="write-card">
+        <div className="support-card-header">
+          <div>
+            <small>{text.compatibilityTitle}</small>
+            <strong>Codex Mate</strong>
+          </div>
+          <Info size={16} weight="bold" />
+        </div>
+        <p className="section-copy">{text.compatibilityIntro}</p>
+      </section>
     </section>
   );
 }
@@ -1848,6 +2159,65 @@ function CheckRow({ label, ok }: { label: string; ok: boolean }) {
       {ok ? <CheckCircle size={16} weight="bold" /> : <XCircle size={16} weight="bold" />}
       <span>{label}</span>
     </div>
+  );
+}
+
+function updateStatusMessage(
+  status: UpdateStatus,
+  text: (typeof copy)["zh"] | (typeof copy)["en"],
+) {
+  if (status.state === "checking") return text.updateCheck;
+  if (status.state === "available") return `${text.updateAvailable}: ${status.latestVersion}`;
+  if (status.state === "current") return text.updateCurrent;
+  if (status.state === "error") return status.message;
+  return text.currentVersion;
+}
+
+function normalizeVersion(value: string) {
+  return value.trim().replace(/^v/i, "") || "0.0.0";
+}
+
+function compareVersions(left: string, right: string) {
+  const leftParts = normalizeVersion(left).split(/[^0-9]+/).map((part) => Number(part || 0));
+  const rightParts = normalizeVersion(right).split(/[^0-9]+/).map((part) => Number(part || 0));
+  const size = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < size; index += 1) {
+    const diff = (leftParts[index] || 0) - (rightParts[index] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function diagnosticFileRows(
+  report: DiagnosticsReport | null,
+  text: (typeof copy)["zh"] | (typeof copy)["en"],
+) {
+  return [
+    { label: `${text.diagnosticsFiles}: config.toml`, ok: Boolean(report?.configExists) },
+    { label: "auth.json", ok: Boolean(report?.authExists) },
+    { label: "state_5.sqlite", ok: Boolean(report?.databaseExists) },
+    { label: "sessions", ok: Boolean(report?.sessionsExists) },
+    { label: "session_index.jsonl", ok: Boolean(report?.sessionIndexExists) },
+    { label: ".codex-global-state.json", ok: Boolean(report?.globalStateExists) },
+  ];
+}
+
+function formatDiagnosticsReport(
+  report: DiagnosticsReport | null,
+  updateStatus: UpdateStatus,
+  language: Language,
+) {
+  return JSON.stringify(
+    {
+      product: "Remote Codex API",
+      locale: language,
+      generatedAt: new Date().toISOString(),
+      updateStatus,
+      diagnostics: report,
+      redaction: "No bearer token or API key is included in this report.",
+    },
+    null,
+    2,
   );
 }
 

@@ -13,7 +13,7 @@ use remote_codex_core::backup::{
     BackupRecord,
 };
 use remote_codex_core::codex_auth::apply_chatgpt_auth;
-use remote_codex_core::codex_config::apply_provider_config;
+use remote_codex_core::codex_config::{apply_provider_config, clear_remote_provider_config};
 use remote_codex_core::codex_status::{
     codex_runtime_status as core_codex_runtime_status, CodexRuntimeStatus,
 };
@@ -38,6 +38,13 @@ struct ActivationOptions {
     token: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClearApiModeOptions {
+    restart_codex: bool,
+    codex_home: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ActivationResult {
@@ -47,6 +54,45 @@ struct ActivationResult {
     history: Option<HistorySyncResult>,
     codex_opened: bool,
     runtime_status: CodexRuntimeStatus,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClearApiModeResult {
+    ok: bool,
+    backup_id: String,
+    codex_opened: bool,
+    runtime_status: CodexRuntimeStatus,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticsReport {
+    app_version: String,
+    platform: String,
+    codex_home: String,
+    config_path: String,
+    auth_path: String,
+    database_path: String,
+    sessions_path: String,
+    session_index_path: String,
+    global_state_path: String,
+    config_exists: bool,
+    auth_exists: bool,
+    database_exists: bool,
+    sessions_exists: bool,
+    session_index_exists: bool,
+    global_state_exists: bool,
+    backup_count: usize,
+    profile_count: usize,
+    custom_root_count: usize,
+    codex_install_found: bool,
+    codex_install_candidates: Vec<String>,
+    codex_process_count: usize,
+    runtime_status: Option<CodexRuntimeStatus>,
+    runtime_error: Option<String>,
+    history_status: Option<HistoryStatus>,
+    history_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -150,6 +196,26 @@ fn activate_profile(id: String, options: ActivationOptions) -> Result<Activation
 }
 
 #[tauri::command]
+fn clear_api_mode(options: ClearApiModeOptions) -> Result<ClearApiModeResult, String> {
+    let paths = CodexPaths::resolve(options.codex_home.as_deref());
+    let backup = create_backup(&paths, "pre-clear-api-mode").map_err(err)?;
+    apply_chatgpt_auth(&paths.auth_path).map_err(err)?;
+    clear_remote_provider_config(&paths.config_path).map_err(err)?;
+    let runtime_status = core_codex_runtime_status(&paths).map_err(err)?;
+    let codex_opened = if options.restart_codex {
+        restart_codex().is_ok()
+    } else {
+        open_codex().is_ok()
+    };
+    Ok(ClearApiModeResult {
+        ok: true,
+        backup_id: backup.id,
+        codex_opened,
+        runtime_status,
+    })
+}
+
+#[tauri::command]
 fn history_status(codex_home: Option<String>) -> Result<HistoryStatus, String> {
     core_history_status(&CodexPaths::resolve(codex_home.as_deref())).map_err(err)
 }
@@ -209,6 +275,47 @@ fn restore_backup(id: String) -> Result<Vec<BackupRecord>, String> {
 #[tauri::command]
 fn open_codex() -> Result<(), String> {
     open_codex_app().map_err(err)
+}
+
+#[tauri::command]
+fn diagnostics(codex_home: Option<String>) -> DiagnosticsReport {
+    let paths = CodexPaths::resolve(codex_home.as_deref());
+    let backups = core_list_backups(&paths).unwrap_or_default();
+    let profiles = store().list_profiles().unwrap_or_default();
+    let roots = history_roots().list_roots().unwrap_or_default();
+    let runtime = core_codex_runtime_status(&paths);
+    let history = core_history_status(&paths);
+    let candidates = codex_install_candidates_for_platform();
+    DiagnosticsReport {
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        platform: std::env::consts::OS.to_string(),
+        codex_home: paths.codex_home.display().to_string(),
+        config_path: paths.config_path.display().to_string(),
+        auth_path: paths.auth_path.display().to_string(),
+        database_path: paths.db_path.display().to_string(),
+        sessions_path: paths.sessions_dir.display().to_string(),
+        session_index_path: paths.session_index_path.display().to_string(),
+        global_state_path: paths.global_state_path.display().to_string(),
+        config_exists: paths.config_path.exists(),
+        auth_exists: paths.auth_path.exists(),
+        database_exists: paths.db_path.exists(),
+        sessions_exists: paths.sessions_dir.exists(),
+        session_index_exists: paths.session_index_path.exists(),
+        global_state_exists: paths.global_state_path.exists(),
+        backup_count: backups.len(),
+        profile_count: profiles.len(),
+        custom_root_count: roots.len(),
+        codex_install_found: candidates.iter().any(|path| path.exists()),
+        codex_install_candidates: candidates
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect(),
+        codex_process_count: codex_process_count(),
+        runtime_status: runtime.as_ref().ok().cloned(),
+        runtime_error: runtime.err().map(|error| error.to_string()),
+        history_status: history.as_ref().ok().cloned(),
+        history_error: history.err().map(|error| error.to_string()),
+    }
 }
 
 fn load_profiles() -> remote_codex_core::Result<Vec<StoredProfile>> {
@@ -305,6 +412,32 @@ fn open_codex_app() -> Result<(), String> {
     }
     #[allow(unreachable_code)]
     Err("Remote Codex API currently supports launching Codex on macOS and Windows".to_string())
+}
+
+fn codex_install_candidates_for_platform() -> Vec<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        return codex_macos_candidates();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return codex_windows_candidates();
+    }
+    #[allow(unreachable_code)]
+    Vec::new()
+}
+
+fn codex_process_count() -> usize {
+    #[cfg(target_os = "macos")]
+    {
+        return codex_process_ids().map(|pids| pids.len()).unwrap_or(0);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return windows_codex_process_count();
+    }
+    #[allow(unreachable_code)]
+    0
 }
 
 fn stop_codex_processes() -> Result<(), String> {
@@ -481,6 +614,20 @@ fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
         .collect()
 }
 
+#[cfg(target_os = "windows")]
+fn windows_codex_process_count() -> usize {
+    let Ok(output) = Command::new("tasklist")
+        .args(["/FI", "IMAGENAME eq codex.exe", "/FO", "CSV", "/NH"])
+        .output()
+    else {
+        return 0;
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.to_lowercase().contains("codex.exe"))
+        .count()
+}
+
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -535,12 +682,14 @@ pub fn run() {
             delete_profile,
             activate_profile,
             codex_status,
+            clear_api_mode,
             history_status,
             history_sync,
             list_history_roots,
             save_history_root,
             delete_history_root,
             open_codex,
+            diagnostics,
             list_backups,
             restore_backup
         ])

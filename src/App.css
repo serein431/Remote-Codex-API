@@ -1223,6 +1223,10 @@ input:focus {
   color: var(--text-primary);
 }
 
+.secondary-button.full-width {
+  width: 100%;
+}
+
 .foot-actions {
   justify-content: space-between;
   align-items: center;
@@ -1257,6 +1261,40 @@ input:focus {
 
 .notice-dock.has-error {
   color: #f8b0a5;
+}
+
+.diagnostic-file-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.diagnostic-file-grid span {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface-1);
+  color: var(--text-secondary);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+}
+
+.diagnostic-file-grid span.ok {
+  color: #baf8d5;
+}
+
+.diagnostic-file-grid span.missing {
+  color: #f8b0a5;
+}
+
+[data-theme="light"] .diagnostic-file-grid span.ok {
+  color: #17683f;
+}
+
+[data-theme="light"] .diagnostic-file-grid span.missing {
+  color: #a34333;
 }
 
 [data-theme="light"] .notice-dock.has-error {
