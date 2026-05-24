@@ -152,7 +152,7 @@ type Preferences = {
 };
 
 const PREFERENCES_STORAGE_KEY = "remote-codex-api.preferences.v1";
-const APP_VERSION = "0.1.0";
+const APP_VERSION = "0.1.1";
 const RELEASE_API_URL = "https://api.github.com/repos/serein431/Remote-Codex-API/releases/latest";
 const RELEASES_URL = "https://github.com/serein431/Remote-Codex-API/releases";
 const previewCreatedAt = "2026-05-16T09:10:00.000Z";

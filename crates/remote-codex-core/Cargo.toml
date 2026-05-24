@@ -1,6 +1,6 @@
 [package]
 name = "remote-codex-core"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Core profile, config, history, and backup logic for Remote Codex API"
 
@@ -17,4 +17,3 @@ walkdir = "2"
 
 [dev-dependencies]
 tempfile = "3"
-

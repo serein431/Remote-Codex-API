@@ -1,6 +1,6 @@
 [package]
 name = "remotecodexapi"
-version = "0.1.0"
+version = "0.1.1"
 description = "Remote Codex API tray app"
 authors = ["Remote Codex API contributors"]
 edition = "2021"
