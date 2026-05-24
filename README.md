@@ -14,15 +14,6 @@ Remote Codex API 是一个轻量桌面托盘工具。它不会注入 Codex UI，
 
 当前二维码有效期至 2026-05-25，过期后会在仓库里更新。
 
-## 支持作者
-
-如果这个工具对你有帮助，欢迎请作者喝杯咖啡 ☕️
-
-- **爱发电**: [https://afdian.net/a/serein431](https://afdian.net/a/serein431)
-- **Ko-fi**: [https://ko-fi.com/serein431](https://ko-fi.com/serein431)
-
-你的支持是我持续维护和更新项目的动力！
-
 ## 友情链接
 
 - [LINUX DO](https://linux.do/)：很有活力的开发者社区，本项目也欢迎来自 LINUX DO 的佬友交流和监督。
